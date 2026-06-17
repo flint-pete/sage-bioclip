@@ -1,0 +1,29 @@
+# ──────────────────────────────────────────────────────────────
+# BioCLIP Species Classifier — sample job specification
+# Deploy on node W019 (ecological monitoring site)
+# Classify at Order rank every 60 seconds
+# ──────────────────────────────────────────────────────────────
+name: bioclip-species-w019
+plugins:
+  - name: bioclip-species-classifier
+    pluginSpec:
+      image: registry.sagecontinuum.org/waggle/bioclip-species-classifier:0.2.0
+      args:
+        - "--stream"
+        - "bottom_camera"
+        - "--rank"
+        - "Order"
+        - "--interval"
+        - "60"
+        - "--min-confidence"
+        - "0.15"
+        - "--top-k"
+        - "5"
+        - "--continuous"
+        - "Y"
+      selector:
+        resource.gpu: "true"
+nodes:
+  W019: true
+scienceRules:
+  - "schedule(bioclip-species-classifier): cronjob('bioclip-species-classifier', '*/10 * * * *')"

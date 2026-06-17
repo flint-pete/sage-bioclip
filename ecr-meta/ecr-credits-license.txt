@@ -1,0 +1,4 @@
+authors: Pete Beckman <pete.beckman@northwestern.edu>
+collaborators: Waggle Team <https://wa8.gl>, Seongha Park <seongha.park@anl.gov>, Sean Shahkarami <sshahkarami@uchicago.edu>
+funding: NSF 1935984 (Sage: A Software-Defined Sensor Network)
+license: The license agreed by Argonne National Laboratory

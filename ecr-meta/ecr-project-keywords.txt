@@ -1,0 +1,15 @@
+Species Classification
+Biodiversity Monitoring
+BioCLIP
+BioCLIP2
+Taxonomy
+Ecology
+Wildlife
+Conservation
+Machine Learning
+Computer Vision
+Edge Computing
+Zero-shot Classification
+Camera
+Neural Networks
+TreeOfLife
