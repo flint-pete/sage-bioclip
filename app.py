@@ -375,19 +375,22 @@ Examples:
                                 predictions[0]["confidence"] if predictions else 0,
                                 args.min_confidence)
 
-                    # Upload annotated image with "no confident prediction" text
-                    annotated = annotate_predictions(frame, predictions,
-                                                     args.min_confidence)
-                    stem = os.path.splitext(source_name)[0]
-                    tmp_path = os.path.join(tempfile.gettempdir(),
-                                            f"{stem}-classified.jpg")
-                    cv2.imwrite(tmp_path, annotated)
-                    plugin.upload_file(tmp_path, timestamp=timestamp,
-                                       meta={"camera": source_name,
-                                             "top_species": "none",
-                                             "confidence": "0"})
-                    if os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+                    # In test mode (--image-dir), still upload annotated image
+                    # so all results can be reviewed. In production, skip upload
+                    # to avoid flooding storage with low-confidence frames.
+                    if using_image_dir:
+                        annotated = annotate_predictions(frame, predictions,
+                                                         args.min_confidence)
+                        stem = os.path.splitext(source_name)[0]
+                        tmp_path = os.path.join(tempfile.gettempdir(),
+                                                f"{stem}-classified.jpg")
+                        cv2.imwrite(tmp_path, annotated)
+                        plugin.upload_file(tmp_path, timestamp=timestamp,
+                                           meta={"camera": source_name,
+                                                 "top_species": "none",
+                                                 "confidence": "0"})
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
 
             except Exception:
                 logger.exception("Classification error")
