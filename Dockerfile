@@ -8,16 +8,28 @@
 FROM nvcr.io/nvidia/pytorch:25.04-py3
 
 WORKDIR /app
+
+# Lock the NVIDIA base-image torch / torchvision versions so that pip
+# cannot silently replace them with generic PyPI wheels.  The NVIDIA
+# build of PyTorch includes Blackwell (sm_120 / sm_121) GPU kernels;
+# the generic PyPI wheel does not, which causes "unable to find an
+# engine" errors at runtime on Blackwell devices.
+# NOTE: the 25.04-py3 base image does NOT ship torchaudio.
+RUN TORCH_VER=$(python3 -c "import torch; print(torch.__version__)") && \
+    TV_VER=$(python3 -c "import torchvision; print(torchvision.__version__)") && \
+    printf "torch==%s\ntorchvision==%s\n" "$TORCH_VER" "$TV_VER" > /tmp/constraints.txt && \
+    echo "--- pip constraints (NVIDIA base image) ---" && cat /tmp/constraints.txt
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt
 
 # The NVIDIA base image may ship an opencv compiled against a different numpy.
 # Fix: fully remove old opencv (pip uninstall + rm stale files), then
 # install a fresh opencv-python-headless matching the current numpy.
 RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null; \
     rm -rf /usr/local/lib/python3.*/dist-packages/cv2* && \
-    pip install --no-cache-dir opencv-python-headless>=4.8.0
+    pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0
 
 # Pre-download BioCLIP2 model weights and TreeOfLife-200M embeddings
 # Layer order matters: model weights change rarely, app.py changes often.
