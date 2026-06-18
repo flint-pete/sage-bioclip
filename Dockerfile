@@ -3,9 +3,9 @@
 # Text embeddings: TreeOfLife-200M (200M+ biological images, 450K+ species)
 # Target: 128GB unified memory ARM64 (DGX Spark / Sage Thor)
 #
-# Base image: NVIDIA PyTorch 25.04 — CUDA 12.9, PyTorch 2.7, Python 3.12
+# Base image: NVIDIA PyTorch 25.08 — CUDA 13.0, PyTorch 2.8, Python 3.12
 # Supports Blackwell GPUs (sm_120/sm_121) natively. Requires driver R575+.
-FROM nvcr.io/nvidia/pytorch:25.04-py3
+FROM nvcr.io/nvidia/pytorch:25.08-py3
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ WORKDIR /app
 # build of PyTorch includes Blackwell (sm_120 / sm_121) GPU kernels;
 # the generic PyPI wheel does not, which causes "unable to find an
 # engine" errors at runtime on Blackwell devices.
-# NOTE: the 25.04-py3 base image does NOT ship torchaudio.
+# NOTE: the 25.08-py3 base image does NOT ship torchaudio.
 RUN TORCH_VER=$(python3 -c "import torch; print(torch.__version__)") && \
     TV_VER=$(python3 -c "import torchvision; print(torchvision.__version__)") && \
     printf "torch==%s\ntorchvision==%s\n" "$TORCH_VER" "$TV_VER" > /tmp/constraints.txt && \
