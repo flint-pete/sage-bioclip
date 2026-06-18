@@ -26,8 +26,11 @@ import logging
 import os
 import tempfile
 import time
+import urllib.request
+import urllib.error
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from bioclip import Rank
@@ -145,6 +148,33 @@ def iter_image_dir(directory: str):
         yield str(img_path), frame, time.time_ns()
 
 
+def fetch_snapshot(url: str) -> np.ndarray:
+    """
+    Fetch a JPEG snapshot from an HTTP URL and return as a BGR numpy array.
+
+    Works with Reolink's HTTP API:
+      http://IP:PORT/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=abc&user=USER&password=PASS
+
+    Also works with any URL that returns a JPEG image (MJPEG snapshot
+    endpoints, generic IP camera snapshot URLs, etc.).
+    """
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            img_bytes = resp.read()
+    except urllib.error.URLError as e:
+        raise ConnectionError(f"Failed to fetch snapshot from {url}: {e}") from e
+
+    img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise ValueError(
+            f"Could not decode image from {url} "
+            f"({len(img_bytes)} bytes received)"
+        )
+    return frame
+
+
 # ── main loop ───────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -153,6 +183,9 @@ def main():
 Examples:
   # Normal mode — capture from camera on a Sage node
   python3 app.py --stream bottom_camera --rank Species
+
+  # HTTP snapshot camera (e.g. Reolink via port-mapped router)
+  python3 app.py --snapshot-url "http://IP:PORT/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=USER&password=PASS&width=640&height=360" --rank Species
 
   # Local testing — classify all images in a directory
   export PYWAGGLE_LOG_DIR=./test-output
@@ -167,6 +200,11 @@ Examples:
                         help="Camera stream name or RTSP URL (ignored if --image-dir is set)")
     parser.add_argument("--image-dir", default=None,
                         help="Directory of test images (replaces camera input for local testing)")
+    parser.add_argument("--snapshot-url", default=None,
+                        help="HTTP URL that returns a JPEG snapshot (e.g. Reolink CGI API). "
+                             "Overrides --stream. Credentials go in the URL query string. "
+                             "Example: http://IP:PORT/cgi-bin/api.cgi?cmd=Snap&channel=0"
+                             "&width=640&height=360")
     parser.add_argument("--rank", default="Class",
                         choices=RANK_NAMES,
                         help="Taxonomic rank for classification")
@@ -189,11 +227,15 @@ Examples:
 
     # ── Choose image source ──────────────────────────────────────────
     using_image_dir = args.image_dir is not None
+    using_snapshot_url = args.snapshot_url is not None
 
     if using_image_dir:
         # Local testing mode: read images from a directory
         image_source = iter_image_dir(args.image_dir)
         source_label = f"image-dir:{args.image_dir}"
+    elif using_snapshot_url:
+        # HTTP snapshot mode: fetch JPEG from URL each cycle
+        source_label = args.snapshot_url.split("?")[0]  # log URL without query params
     else:
         # Production mode: capture from camera
         camera = Camera(args.stream)
@@ -218,6 +260,12 @@ Examples:
                     source_name = os.path.basename(img_path)
                     logger.info("Processing: %s (%dx%d)",
                                 source_name, frame.shape[1], frame.shape[0])
+                elif using_snapshot_url:
+                    frame = fetch_snapshot(args.snapshot_url)
+                    timestamp = time.time_ns()
+                    source_name = "http-snapshot"
+                    logger.info("Snapshot: %dx%d from %s",
+                                frame.shape[1], frame.shape[0], source_label)
                 else:
                     sample = camera.snapshot()
                     frame = sample.data  # numpy BGR
@@ -269,7 +317,8 @@ Examples:
                                        meta={"camera": source_name,
                                              "top_species": top["name"],
                                              "confidence": str(top["confidence"])})
-                    os.unlink(tmp_path)
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                 else:
                     logger.info("No confident prediction (top=%.4f, threshold=%.2f)",
                                 predictions[0]["confidence"] if predictions else 0,
