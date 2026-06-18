@@ -1,24 +1,23 @@
 """
-BioCLIP2 Species Classifier Plugin for Sage/Waggle
-Captures camera frames, classifies biological organisms using BioCLIP2
-(imageomics/bioclip-2), and publishes taxonomy predictions.
+BioCLIP 2.5 Species Classifier Plugin for Sage/Waggle
+Captures camera frames, classifies biological organisms using BioCLIP 2.5
+(imageomics/bioclip-2.5-vith14), and publishes taxonomy predictions.
 
-BioCLIP2 is a CLIP model fine-tuned on the TreeOfLife-200M dataset
-covering 450K+ species with significantly improved accuracy over v1.
-It classifies at any taxonomic rank:
-Kingdom > Phylum > Class > Order > Family > Genus > Species.
+BioCLIP 2.5 Huge is a CLIP model fine-tuned on the TreeOfLife-200M dataset
+covering 450K+ species.  It uses a ViT-H/14 backbone and achieves 61.3%
+mean zero-shot species accuracy (+5.7% over BioCLIP 2).
 
-Default model: BioCLIP2 (hf-hub:imageomics/bioclip-2)
-  - Architecture: SigLIP2-based vision transformer (~430M params)
-  - Training data: TreeOfLife-200M (200M+ biological images)
-  - ~2.5 GB GPU memory at inference
+Default model: BioCLIP 2.5 Huge (hf-hub:imageomics/bioclip-2.5-vith14)
+  - Architecture: ViT-H/14 vision transformer
+  - Training data: TreeOfLife-200M (219M+ biological images)
+  - ~5-7 GB GPU memory at inference
   - Fits easily in 128GB unified memory (DGX Spark / Sage Thor)
 
 Measurement topics:
   env.species.<rank>           — top predicted taxon name at chosen rank
   env.species.<rank>.confidence — confidence score (0-1)
   env.species.top5             — JSON of top-5 predictions
-  upload                       — original camera image
+  upload                       — annotated camera image (above threshold only)
 """
 import argparse
 import json
@@ -257,8 +256,8 @@ Examples:
     parser.add_argument("--rank", default="Class",
                         choices=RANK_NAMES,
                         help="Taxonomic rank for classification")
-    parser.add_argument("--model", default="hf-hub:imageomics/bioclip-2",
-                        help="BioCLIP model string (default: BioCLIP2)")
+    parser.add_argument("--model", default="hf-hub:imageomics/bioclip-2.5-vith14",
+                        help="BioCLIP model string (default: BioCLIP 2.5 Huge ViT-H/14)")
     parser.add_argument("--interval", type=int, default=60,
                         help="Seconds between captures (camera mode only)")
     parser.add_argument("--min-confidence", type=float, default=0.1,
