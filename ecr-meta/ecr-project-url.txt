@@ -1,1 +1,1 @@
-https://sagecontinuum.org
+https://github.com/flint-pete/sage-bioclip
