@@ -2,6 +2,8 @@ Species Classification
 Biodiversity Monitoring
 BioCLIP
 BioCLIP2
+BioCLIP 2.5
+ViT-H
 Taxonomy
 Ecology
 Wildlife
@@ -13,5 +15,7 @@ Zero-shot Classification
 Camera
 Neural Networks
 TreeOfLife
+Hummingbird
+Image Annotation
 Contrastive Learning
 Vision-Language Model
