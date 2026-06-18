@@ -17,7 +17,8 @@ WORKDIR /app
 # NOTE: the 25.08-py3 base image does NOT ship torchaudio.
 RUN TORCH_VER=$(python3 -c "import torch; print(torch.__version__)") && \
     TV_VER=$(python3 -c "import torchvision; print(torchvision.__version__)") && \
-    printf "torch==%s\ntorchvision==%s\n" "$TORCH_VER" "$TV_VER" > /tmp/constraints.txt && \
+    NP_VER=$(python3 -c "import numpy; print(numpy.__version__)") && \
+    printf "torch==%s\ntorchvision==%s\nnumpy==%s\n" "$TORCH_VER" "$TV_VER" "$NP_VER" > /tmp/constraints.txt && \
     echo "--- pip constraints (NVIDIA base image) ---" && cat /tmp/constraints.txt
 
 COPY requirements.txt .
