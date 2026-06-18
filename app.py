@@ -175,6 +175,55 @@ def fetch_snapshot(url: str) -> np.ndarray:
     return frame
 
 
+def annotate_predictions(frame: np.ndarray, predictions: list[dict],
+                         min_confidence: float) -> np.ndarray:
+    """Annotate a frame with species predictions in orange text.
+
+    - Above threshold: show top predictions with confidence
+    - Below threshold: show "No confident prediction" message
+    """
+    annotated = frame.copy()
+    h, w = annotated.shape[:2]
+    # Orange in BGR
+    color = (0, 165, 255)
+    bg_color = (0, 0, 0)
+
+    # Scale font to image size
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = max(0.5, min(w, h) / 1000.0)
+    thickness = max(1, int(scale * 2))
+    line_gap = int(30 * scale)
+    margin = int(10 * scale)
+
+    if not predictions or predictions[0]["confidence"] < min_confidence:
+        # No confident prediction — write message at bottom
+        top_conf = predictions[0]["confidence"] if predictions else 0
+        text = f"No confident species prediction (best: {top_conf:.1%})"
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        y = h - margin
+        cv2.rectangle(annotated, (margin, y - th - 4),
+                      (margin + tw + 4, y + 4), bg_color, -1)
+        cv2.putText(annotated, text, (margin + 2, y),
+                    font, scale, color, thickness)
+    else:
+        # Show top predictions in top-left corner
+        y = margin + line_gap
+        for i, pred in enumerate(predictions):
+            conf = pred["confidence"]
+            name = pred["name"]
+            text = f"#{i+1}: {name} ({conf:.1%})"
+            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+            cv2.rectangle(annotated, (margin, y - th - 4),
+                          (margin + tw + 4, y + 4), bg_color, -1)
+            cv2.putText(annotated, text, (margin + 2, y),
+                        font, scale, color, thickness)
+            y += line_gap
+            if i >= 4:  # Show max 5
+                break
+
+    return annotated
+
+
 # ── main loop ───────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -308,11 +357,13 @@ Examples:
                     for i, p in enumerate(predictions[1:], 2):
                         logger.info("  #%d: %s (%.4f)", i, p["name"], p["confidence"])
 
-                    # Upload source image
+                    # Upload annotated image
+                    annotated = annotate_predictions(frame, predictions,
+                                                     args.min_confidence)
                     stem = os.path.splitext(source_name)[0]
                     tmp_path = os.path.join(tempfile.gettempdir(),
                                             f"{stem}-classified.jpg")
-                    cv2.imwrite(tmp_path, frame)
+                    cv2.imwrite(tmp_path, annotated)
                     plugin.upload_file(tmp_path, timestamp=timestamp,
                                        meta={"camera": source_name,
                                              "top_species": top["name"],
@@ -323,6 +374,20 @@ Examples:
                     logger.info("No confident prediction (top=%.4f, threshold=%.2f)",
                                 predictions[0]["confidence"] if predictions else 0,
                                 args.min_confidence)
+
+                    # Upload annotated image with "no confident prediction" text
+                    annotated = annotate_predictions(frame, predictions,
+                                                     args.min_confidence)
+                    stem = os.path.splitext(source_name)[0]
+                    tmp_path = os.path.join(tempfile.gettempdir(),
+                                            f"{stem}-classified.jpg")
+                    cv2.imwrite(tmp_path, annotated)
+                    plugin.upload_file(tmp_path, timestamp=timestamp,
+                                       meta={"camera": source_name,
+                                             "top_species": "none",
+                                             "confidence": "0"})
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
 
             except Exception:
                 logger.exception("Classification error")
