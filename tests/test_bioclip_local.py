@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-BioCLIP2 Local Test Runner — Classify real images from a test directory.
+BioCLIP 2.5 Local Test Runner — Classify real images from a test directory.
 
-Runs the actual BioCLIP2 plugin (app.py) against every image in
+Runs the actual BioCLIP 2.5 plugin (app.py) against every image in
 tests/test-images/, validates the pywaggle output, and prints
 a detailed report with per-image species predictions and timing.
 
-This is the go-to test for checking whether BioCLIP2 is performing well
+This is the go-to test for checking whether BioCLIP 2.5 is performing well
 on your own images before deploying to a Sage node.
 
 Setup:
@@ -174,7 +174,7 @@ def print_image_report(result: dict, idx: int):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="BioCLIP2 local test runner — classify test images and report results",
+        description="BioCLIP 2.5 local test runner — classify test images and report results",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--rank", default="Species", choices=RANK_NAMES,
@@ -206,7 +206,7 @@ def main():
     ranks = RANK_NAMES if args.all_ranks else [args.rank]
 
     print("=" * 70)
-    print("  BioCLIP2 LOCAL TEST")
+    print("  BioCLIP 2.5 LOCAL TEST")
     print("=" * 70)
     print(f"  Test images:  {TEST_IMAGES}")
     print(f"  Image count:  {len(images)}")
