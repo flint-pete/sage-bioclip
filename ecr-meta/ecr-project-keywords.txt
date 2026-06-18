@@ -13,7 +13,5 @@ Zero-shot Classification
 Camera
 Neural Networks
 TreeOfLife
-Hummingbird
-Image Annotation
 Contrastive Learning
 Vision-Language Model
