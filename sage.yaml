@@ -11,7 +11,7 @@ homepage: "https://github.com/flint-pete/sage-bioclip"
 source:
     architectures:
         - "linux/arm64"
-        - "linux/amd64"
+        # - "linux/amd64"  # disabled: QEMU crashes on NVIDIA base image during cross-build
     url: "https://github.com/flint-pete/sage-bioclip.git"
     branch: "main"
 inputs:
