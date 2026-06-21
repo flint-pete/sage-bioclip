@@ -221,19 +221,141 @@ sudo pluginctl deploy -n bioclip-hummingcam \
 ```
 
 
-## Publish to Sage ECR (Production)
+## Production: Scheduled SES Cron Jobs on Thor (arm64)
 
-The Sage Edge Code Repository (ECR) is **not** a Docker registry.
-You do not `docker push`. ECR pulls from GitHub and builds for you.
+This is the production deployment path — a scheduler-managed one-shot
+cron job (every 10 min) instead of a hand-deployed continuous pod. It
+replaces the `pluginctl deploy ... --continuous Y` approach, which pins
+the GPU/RAM 24/7, dies on reboot, and is invisible to the scheduler.
 
-1. Go to https://portal.sagecontinuum.org
-2. Sign in → My Apps → Create App
-3. Enter: `https://github.com/flint-pete/sage-bioclip`
-4. ECR builds the image and assigns a registry tag
+### Why the normal ECR portal build does NOT work for this plugin
 
-**Note:** ECR multi-arch arm64 builds currently fail with the NVIDIA
-base image (QEMU emulation crashes on `import torch`). See the
-infrastructure issues report for details.
+The documented Sage workflow is "Create App → Register and Build App" and
+the ECR portal builds the image from your GitHub repo. **That build fails
+for any arm64 plugin on the NVIDIA base image**, and here is why:
+
+- The ECR/Jenkins build pipeline runs on **x86_64** hardware.
+- To produce a `linux/arm64` image it cross-builds under **QEMU emulation**.
+- The NVIDIA base (`nvcr.io/nvidia/pytorch:25.08-py3`) contains aarch64
+  binaries QEMU cannot emulate; the build crashes on `import torch` /
+  `pip install` with `qemu: uncaught target signal 6 (Aborted) - core
+  dumped`, build exit 134.
+
+So the portal build is a dead end for Thor-targeted NVIDIA plugins until
+the ECR pipeline gets a **native arm64 builder**. (BioCLIP 2.5's ViT-H/14
+image is ~28 GB, so it's the heaviest of the three to build/sideload.)
+
+### Why `docker push` to the registry also does NOT work (yet)
+
+Build natively on Thor (arm64, no QEMU), then push to
+`registry.sagecontinuum.org`? The build succeeds, but the push is denied:
+
+```
+denied: requested access to the resource is denied
+```
+
+`docker login registry.sagecontinuum.org` with a Sage portal access token
+**authenticates** (login succeeds) but the token is **read/pull-only** — it
+lacks push/write scope to the `beckman` namespace. Registry writes are
+reserved for the Jenkins build pipeline. Getting push access (or a native
+arm64 builder) is an ECR-team request — see "Systemic fix" below.
+
+### The working workaround: build locally + sideload into k3s
+
+Because SES pods on Thor use **`imagePullPolicy: IfNotPresent`**, the
+scheduler uses a locally-cached image if one is already present in k3s
+containerd under the exact registry-qualified name — it never has to pull
+from the registry. So we build natively on Thor, tag with the full
+registry path, and import it straight into k3s. No registry push needed.
+
+**Step 1 — build natively on Thor (arm64, no QEMU):**
+
+```bash
+cd ~/sage-bioclip
+git pull
+sudo docker build -t registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 .
+```
+
+Note the tag is the **full registry path**, not the bare
+`bioclip-species:0.3.0`. It must exactly match the `image:` field in the
+job YAML so k3s finds the cached copy. (The bare local image name used by
+the old `pluginctl` workflow was `bioclip-species`; the ECR app / registry
+name is `bioclip-species-classifier` — make sure the tag uses the latter.)
+
+**Step 2 — sideload into k3s containerd** (this is large, ~28 GB; allow
+several minutes):
+
+```bash
+sudo docker save registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 \
+  | sudo k3s ctr images import -
+```
+
+**Step 3 — verify it landed (and is CRI-managed):**
+
+```bash
+sudo k3s ctr images ls | grep bioclip-species-classifier
+# Expect registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0
+# with io.cri-containerd.image=managed  (that label = k8s/SES can see it)
+```
+
+**Step 4 — register the app in the ECR portal (metadata only).** The app
+must exist in the ECR *catalog* so the SES scheduler's validation passes
+(SES checks the app catalog, not the raw Docker registry). The portal
+*build* will fail (QEMU) — that's fine, we only need the app + version
+record registered. Make the app **public** or SES returns
+`registry does not exist in ECR`.
+
+**Step 5 — create + submit the SES cron job** (needs a write-scoped SES
+token in your interactive shell; see jobs/bioclip-hummingcam-h00f.yaml):
+
+```bash
+sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" \
+    create -f jobs/bioclip-hummingcam-h00f.yaml   # returns a numeric job ID
+sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" \
+    submit -j <job-id>
+```
+
+**Step 6 — verify it fires and publishes.** The pod appears in the `ses`
+namespace each tick, runs (with a cold-start model load each cycle, since
+one-shot), publishes, exits, and is GC'd — invisible between ticks.
+Confirm via the data API:
+
+```bash
+curl -s -X POST https://data.sagecontinuum.org/api/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"start":"-15m","filter":{"vsn":"H00F","name":"env.species.species"}}'
+```
+
+The proof it's the SES job (not a leftover hand-deployed pod) is in the
+record metadata: `"job": "bioclip-species-classifier-<id>"` and
+`"plugin": "registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0"`
+("already present on machine" in the pod events confirms the sideload hit).
+
+> ⚠️ **Cold-start caveat for BioCLIP:** as a one-shot, BioCLIP 2.5 ViT-H/14
+> reloads the model every cycle. At a 10-min cadence this is acceptable, but
+> if you ever tighten the schedule, measure the per-cycle load time first —
+> a continuous pod (warm model) may be the better trade for high frequency.
+
+### Re-deploying after a code change (new version)
+
+Bump the version everywhere (sage.yaml, Makefile, job YAML), then repeat
+build → sideload with the new tag. Because the tag changes, k3s uses the
+new local image on the next tick automatically; no job re-submit needed if
+the job YAML already points at the new tag (otherwise update + re-submit).
+
+### Systemic fix (escalate to the ECR/cyberinfra team)
+
+The sideload workaround is manual and per-node. The durable fix is one of:
+
+- **(a)** Grant push/write access to `registry.sagecontinuum.org/beckman/`
+  for a Sage portal token, so `docker push` works after a native Thor build; or
+- **(b)** Add a **native arm64 build node** to the Jenkins ECR pipeline so
+  the portal "Register and Build" path works without QEMU.
+
+Either unblocks every Thor-targeted NVIDIA plugin (yolo, bioclip, birdnet)
+and removes the manual sideload step entirely.
+
+See: https://sagecontinuum.org/docs/tutorials/edge-apps/publishing-to-ecr
 
 
 ## Troubleshooting
