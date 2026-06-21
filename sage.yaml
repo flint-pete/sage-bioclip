@@ -1,6 +1,6 @@
 name: "bioclip-species-classifier"
 namespace: "waggle"
-version: "0.3.0"
+version: "0.3.1"
 description: "BioCLIP 2.5 Huge species classifier — identifies organisms at any taxonomic rank (Kingdom through Species) from camera images using the ViT-H/14 BioCLIP 2.5 model trained on TreeOfLife-200M (219M+ images, 450K+ species)."
 authors: "Pete Beckman"
 collaborators: "Sage Team"

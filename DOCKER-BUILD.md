@@ -273,7 +273,7 @@ registry path, and import it straight into k3s. No registry push needed.
 ```bash
 cd ~/sage-bioclip
 git pull
-sudo docker build -t registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 .
+sudo docker build -t registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1 .
 ```
 
 Note the tag is the **full registry path**, not the bare
@@ -286,7 +286,7 @@ name is `bioclip-species-classifier` — make sure the tag uses the latter.)
 several minutes):
 
 ```bash
-sudo docker save registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 \
+sudo docker save registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1 \
   | sudo k3s ctr images import -
 ```
 
@@ -294,7 +294,7 @@ sudo docker save registry.sagecontinuum.org/beckman/bioclip-species-classifier:0
 
 ```bash
 sudo k3s ctr images ls | grep bioclip-species-classifier
-# Expect registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0
+# Expect registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1
 # with io.cri-containerd.image=managed  (that label = k8s/SES can see it)
 ```
 
@@ -306,7 +306,7 @@ you sideloaded. If the catalog has no record for your exact version,
 `sesctl submit` fails with:
 
 ```
-[registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 does not exist in ECR]
+[registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1 does not exist in ECR]
 ```
 
 You do **not** need the portal UI (and you do **not** need the portal
@@ -319,7 +319,7 @@ python3 scripts/register-ecr-version.py \
     --namespace beckman \
     --name bioclip-species-classifier \
     --from-version 0.3.0 \
-    --version 0.3.0 \
+    --version 0.3.1 \
     --git-url https://github.com/flint-pete/sage-bioclip.git \
     --token "$SAGE_TOKEN"
 ```
@@ -368,7 +368,7 @@ curl -s -X POST https://data.sagecontinuum.org/api/v1/query \
 
 The proof it's the SES job (not a leftover hand-deployed pod) is in the
 record metadata: `"job": "bioclip-species-classifier-<id>"` and
-`"plugin": "registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0"`
+`"plugin": "registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1"`
 ("already present on machine" in the pod events confirms the sideload hit).
 
 > ⚠️ **Cold-start caveat for BioCLIP:** as a one-shot, BioCLIP 2.5 ViT-H/14

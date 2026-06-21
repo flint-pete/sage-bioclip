@@ -180,6 +180,9 @@ def annotate_predictions(frame: np.ndarray, predictions: list[dict],
 
     - Above threshold: show top predictions with confidence
     - Below threshold: show "No confident prediction" message
+
+    Line spacing is derived from the MEASURED glyph height plus padding
+    (not a fixed constant), so lines never overlap at any image/font size.
     """
     annotated = frame.copy()
     h, w = annotated.shape[:2]
@@ -191,31 +194,32 @@ def annotate_predictions(frame: np.ndarray, predictions: list[dict],
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(0.5, min(w, h) / 1000.0)
     thickness = max(1, int(scale * 2))
-    line_gap = int(30 * scale)
     margin = int(10 * scale)
+
+    # Measure a representative glyph height once, then set line spacing from
+    # the ACTUAL text height + baseline + padding so lines never collide.
+    (_, sample_th), sample_base = cv2.getTextSize("Ag", font, scale, thickness)
+    line_gap = sample_th + sample_base + max(6, int(sample_th * 0.5))
+
+    def draw_line(text, y):
+        (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
+        cv2.rectangle(annotated, (margin, y - th - base - 2),
+                      (margin + tw + 6, y + 2), bg_color, -1)
+        cv2.putText(annotated, text, (margin + 3, y - base + 1),
+                    font, scale, color, thickness)
 
     if not predictions or predictions[0]["confidence"] < min_confidence:
         # No confident prediction — write message at bottom
         top_conf = predictions[0]["confidence"] if predictions else 0
-        text = f"No confident species prediction (best: {top_conf:.1%})"
-        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-        y = h - margin
-        cv2.rectangle(annotated, (margin, y - th - 4),
-                      (margin + tw + 4, y + 4), bg_color, -1)
-        cv2.putText(annotated, text, (margin + 2, y),
-                    font, scale, color, thickness)
+        draw_line(f"No confident species prediction (best: {top_conf:.1%})",
+                  h - margin)
     else:
         # Show top predictions in top-left corner
         y = margin + line_gap
         for i, pred in enumerate(predictions):
             conf = pred["confidence"]
             name = pred["name"]
-            text = f"#{i+1}: {name} ({conf:.1%})"
-            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-            cv2.rectangle(annotated, (margin, y - th - 4),
-                          (margin + tw + 4, y + 4), bg_color, -1)
-            cv2.putText(annotated, text, (margin + 2, y),
-                        font, scale, color, thickness)
+            draw_line(f"#{i+1}: {name} ({conf:.1%})", y)
             y += line_gap
             if i >= 4:  # Show max 5
                 break

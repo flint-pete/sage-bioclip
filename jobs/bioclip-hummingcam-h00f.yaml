@@ -3,7 +3,7 @@
 # Replaces the hand-deployed continuous pod (default ns, --continuous Y
 # --interval 60) with a proper scheduler-managed one-shot job every 10 min.
 #
-# Image: ECR app beckman/bioclip-species-classifier:0.3.0 (BioCLIP 2.5 ViT-H/14)
+# Image: ECR app beckman/bioclip-species-classifier:0.3.1 (BioCLIP 2.5 ViT-H/14)
 # Camera: Reolink RLC-811A snapshot CGI (creds as query params).
 # --rank Species + --min-confidence 0.5 match the running hummingcam config.
 #
@@ -19,7 +19,7 @@ name: bioclip-hummingcam
 plugins:
   - name: bioclip-species-classifier
     pluginSpec:
-      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1
       args:
         - "--snapshot-url"
         - "http://10.107.0.221:10000/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
