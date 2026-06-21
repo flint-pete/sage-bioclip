@@ -298,11 +298,51 @@ sudo k3s ctr images ls | grep bioclip-species-classifier
 # with io.cri-containerd.image=managed  (that label = k8s/SES can see it)
 ```
 
-**Step 4 — register the app in the ECR portal (metadata only).** The app
-must exist in the ECR *catalog* so the SES scheduler's validation passes
-(SES checks the app catalog, not the raw Docker registry). The portal
-*build* will fail (QEMU) — that's fine, we only need the app + version
-record registered. Make the app **public** or SES returns
+### Step 4 — register the version in the ECR catalog (metadata only)
+
+SES validates a job's image against the ECR app **catalog**
+(ecr.sagecontinuum.org), NOT against the raw Docker registry or the image
+you sideloaded. If the catalog has no record for your exact version,
+`sesctl submit` fails with:
+
+```
+[registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0 does not exist in ECR]
+```
+
+You do **not** need the portal UI (and you do **not** need the portal
+*build* to succeed — for this NVIDIA-base plugin it crashes under QEMU
+anyway) — you only need the catalog metadata record. Register it directly
+via the ECR API with the included helper script:
+
+```bash
+python3 scripts/register-ecr-version.py \
+    --namespace beckman \
+    --name bioclip-species-classifier \
+    --from-version 0.3.0 \
+    --version 0.3.0 \
+    --git-url https://github.com/flint-pete/sage-bioclip.git \
+    --token "$SAGE_TOKEN"
+```
+
+(For a *new* version, set `--from-version` to an already-registered
+version to clone, and `--version` to the new one.)
+
+The script clones an existing version's catalog record, bumps the version
+and git source, and POSTs it to `/api/submit` using the
+`Authorization: Sage <token>` header. It's idempotent (re-running a version
+that already exists is a no-op) and prints the resulting catalog listing.
+
+> **Under the hood:** that's a `POST https://ecr.sagecontinuum.org/api/submit`
+> with your Sage portal token. The one required field the API insists on is
+> `description`. The catalog record only satisfies SES validation — the
+> actual image still comes from your sideloaded copy via
+> `imagePullPolicy: IfNotPresent`.
+
+If you prefer the UI: Portal → My Apps → the app → add the version from
+GitHub. The portal *build* will fail (QEMU), but the catalog record still
+gets created, which is all SES needs.
+
+Either way, make the app **public** or SES returns
 `registry does not exist in ECR`.
 
 **Step 5 — create + submit the SES cron job** (needs a write-scoped SES
