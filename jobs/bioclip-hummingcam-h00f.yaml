@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────────
+# BioCLIP Species Classifier — H00F hummingbird cam (SES cron, one-shot)
+# Replaces the hand-deployed continuous pod (default ns, --continuous Y
+# --interval 60) with a proper scheduler-managed one-shot job every 10 min.
+#
+# Image: ECR app beckman/bioclip-species-classifier:0.3.0 (BioCLIP 2.5 ViT-H/14)
+# Camera: Reolink RLC-811A snapshot CGI (creds as query params).
+# --rank Species + --min-confidence 0.5 match the running hummingcam config.
+#
+# NOTE: BioCLIP 2.5 ViT-H/14 is a large model; as a one-shot it reloads each
+#       cycle (cold start). At a 10-min cadence this is acceptable, but verify
+#       the per-cycle load time on Thor before relying on tight scheduling.
+#
+# Submit (with a write-scoped token):
+#   sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" create -f jobs/bioclip-hummingcam-h00f.yaml
+#   sesctl ... submit -j <returned-id>
+# ──────────────────────────────────────────────────────────────
+name: bioclip-hummingcam
+plugins:
+  - name: bioclip-species-classifier
+    pluginSpec:
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.0
+      args:
+        - "--snapshot-url"
+        - "http://10.107.0.221:10000/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
+        - "--rank"
+        - "Species"
+        - "--min-confidence"
+        - "0.5"
+        - "--top-k"
+        - "5"
+        - "--continuous"
+        - "N"
+      selector:
+        resource.gpu: "true"
+nodes:
+  H00F: true
+scienceRules:
+  - "schedule(bioclip-species-classifier): cronjob('bioclip-species-classifier', '*/10 * * * *')"
+successcriteria:
+  - WallClock('30day')
