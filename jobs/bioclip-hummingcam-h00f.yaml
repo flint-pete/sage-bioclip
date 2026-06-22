@@ -1,15 +1,28 @@
 # ──────────────────────────────────────────────────────────────
-# BioCLIP Species Classifier — H00F hummingbird cam (SES cron, one-shot)
-# Replaces the hand-deployed continuous pod (default ns, --continuous Y
-# --interval 60) with a proper scheduler-managed one-shot job every 10 min.
+# BioCLIP Species Classifier — H00F hummingbird cam (CONTINUOUS, scheduler-managed)
+#
+# This is the DEFAULT/recommended mode for the hummingbird cam. It classifies a
+# frame every 60 seconds, which matters for two reasons:
+#   1. Detection coverage: hummingbirds visit the feeder for only a few seconds,
+#      so a slow sampling rate misses them almost entirely. (When YOLO ran as a
+#      */10 one-shot cron, bird detections collapsed from ~15/day to ~0 — the
+#      bird is rarely in-frame at the 10-min mark. BioCLIP has the same problem.)
+#   2. No cold start: BioCLIP 2.5 ViT-H/14 is a ~28 GB model. As a one-shot it
+#      RELOADS the whole model every cycle. Running continuous loads it ONCE and
+#      keeps it warm, so each subsequent classification is fast.
+#
+# CONTINUOUS vs ONE-SHOT — choose your mode:
+#   • CONTINUOUS (this file): --continuous Y --interval 60, scheduler keeps the
+#     pod running, classifies every 60s, model stays warm. Best for fast/
+#     intermittent subjects like hummingbirds. Holds the GPU.
+#   • ONE-SHOT  (jobs/bioclip-hummingcam-h00f-oneshot.yaml): --continuous N on a
+#     cron schedule (e.g. */10). One classification per tick, frees the GPU
+#     between ticks, but pays the ~28 GB model cold-start each cycle. Fine for
+#     slow-changing scenes; too sparse for birds. See that file's header.
 #
 # Image: ECR app beckman/bioclip-species-classifier:0.3.1 (BioCLIP 2.5 ViT-H/14)
 # Camera: Reolink RLC-811A snapshot CGI (creds as query params).
 # --rank Species + --min-confidence 0.5 match the running hummingcam config.
-#
-# NOTE: BioCLIP 2.5 ViT-H/14 is a large model; as a one-shot it reloads each
-#       cycle (cold start). At a 10-min cadence this is acceptable, but verify
-#       the per-cycle load time on Thor before relying on tight scheduling.
 #
 # Submit (with a write-scoped token):
 #   sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" create -f jobs/bioclip-hummingcam-h00f.yaml
@@ -30,12 +43,16 @@ plugins:
         - "--top-k"
         - "5"
         - "--continuous"
-        - "N"
+        - "Y"
+        - "--interval"
+        - "60"
       selector:
         resource.gpu: "true"
 nodes:
   H00F: true
 scienceRules:
-  - "schedule(bioclip-species-classifier): cronjob('bioclip-species-classifier', '*/10 * * * *')"
+  # Continuous: schedule the plugin to run and stay running (no cronjob()).
+  # The plugin's own --continuous Y / --interval 60 loop drives the 60s cadence.
+  - "schedule(bioclip-species-classifier): True"
 successcriteria:
   - WallClock('30day')

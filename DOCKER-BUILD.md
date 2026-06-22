@@ -221,12 +221,39 @@ sudo pluginctl deploy -n bioclip-hummingcam \
 ```
 
 
-## Production: Scheduled SES Cron Jobs on Thor (arm64)
+## Production: Scheduled SES Jobs on Thor (arm64)
 
-This is the production deployment path — a scheduler-managed one-shot
-cron job (every 10 min) instead of a hand-deployed continuous pod. It
-replaces the `pluginctl deploy ... --continuous Y` approach, which pins
-the GPU/RAM 24/7, dies on reboot, and is invisible to the scheduler.
+This is the production deployment path — a scheduler-managed job that
+survives reboots and is visible to the scheduler, instead of a hand-deployed
+`pluginctl` pod. There are **two modes**, and the choice matters:
+
+### Continuous vs One-shot — choose before you deploy
+
+| | **Continuous** (default for birds) | **One-shot** (cron) |
+|---|---|---|
+| Job file | `jobs/bioclip-hummingcam-h00f.yaml` | `jobs/bioclip-hummingcam-h00f-oneshot.yaml` |
+| Args | `--continuous Y --interval 60` | `--continuous N` |
+| Science rule | `schedule(...): True` | `schedule(...): cronjob(..., '*/10 * * * *')` |
+| Sampling | every 60 s (pod stays running) | once per cron tick (pod exits between) |
+| Model load | once, stays **warm** | **cold start** (~28 GB) every tick |
+| GPU | held 24/7 | freed between ticks |
+| Best for | fast / intermittent subjects: **hummingbirds** | slow scenes where a 10-min cadence is plenty |
+
+**Why this matters for BioCLIP — two reasons:**
+
+1. **Detection coverage.** When the companion YOLO cam ran as a `*/10`
+   one-shot cron, bird detections collapsed from ~15/day to ~0 — a
+   hummingbird is in-frame only a few seconds, so 10-min sampling almost
+   never catches one. BioCLIP classifies whatever is in frame, so it has the
+   same coverage problem if you care about catching the bird.
+2. **Cold start.** BioCLIP 2.5 ViT-H/14 is a ~28 GB model. As a one-shot it
+   reloads the entire model **every cycle**. Continuous loads it once and
+   keeps it warm, so each classification is fast.
+
+**Rule of thumb:** for the hummingbird cam use **continuous**; reserve
+one-shot for slow-changing scenes where the cold start and sparse sampling
+are acceptable. To switch modes, deploy the other job file (see "Create +
+submit" below).
 
 ### Why the normal ECR portal build does NOT work for this plugin
 
@@ -345,15 +372,27 @@ gets created, which is all SES needs.
 Either way, make the app **public** or SES returns
 `registry does not exist in ECR`.
 
-**Step 5 — create + submit the SES cron job** (needs a write-scoped SES
-token in your interactive shell; see jobs/bioclip-hummingcam-h00f.yaml):
+**Step 5 — create + submit the SES job** (needs a write-scoped SES
+token in your interactive shell). **Pick the job file for your mode** (see
+"Continuous vs One-shot" above):
+
+- Continuous (default, for hummingbirds): `jobs/bioclip-hummingcam-h00f.yaml`
+- One-shot cron (slow scenes): `jobs/bioclip-hummingcam-h00f-oneshot.yaml`
 
 ```bash
+# Continuous (recommended for the bird cam — warm model, 60s sampling):
 sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" \
     create -f jobs/bioclip-hummingcam-h00f.yaml   # returns a numeric job ID
 sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" \
     submit -j <job-id>
+
+# …or one-shot cron instead (swap the file):
+#   create -f jobs/bioclip-hummingcam-h00f-oneshot.yaml
 ```
+
+To switch an already-running job between modes: suspend + remove the old
+job (`sesctl ... rm -s <id>` then `sesctl ... rm <id>`), then create +
+submit the other job file.
 
 **Step 6 — verify it fires and publishes.** The pod appears in the `ses`
 namespace each tick, runs (with a cold-start model load each cycle, since

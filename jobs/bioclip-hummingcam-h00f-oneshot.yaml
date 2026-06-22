@@ -1,0 +1,56 @@
+# ──────────────────────────────────────────────────────────────
+# BioCLIP Species Classifier — H00F cam (ONE-SHOT, scheduler cron */10)
+#
+# ALTERNATE mode. One classification per cron tick (every 10 min here), then the
+# pod exits and frees the GPU until the next tick.
+#
+# ⚠️ TWO drawbacks for the hummingbird cam:
+#   1. NOT suitable for fast/intermittent subjects. A hummingbird visits the
+#      feeder for a few seconds; sampling once every 10 min almost never
+#      coincides with a visit. Use the CONTINUOUS job
+#      (jobs/bioclip-hummingcam-h00f.yaml) for birds.
+#   2. COLD START every cycle. BioCLIP 2.5 ViT-H/14 is a ~28 GB model; one-shot
+#      reloads it on every tick (slow). Continuous loads it once and keeps it
+#      warm.
+#
+# WHEN ONE-SHOT IS THE RIGHT CHOICE:
+#   • Slow-changing scenes where a 10-min cadence is plenty.
+#   • GPU-shared nodes where holding the GPU 24/7 is undesirable AND the cold
+#     start is acceptable.
+#
+# TUNING THE RATE: change the cron expression in scienceRules below.
+#   '*/10 * * * *' = every 10 min  |  '*/5 * * * *' = every 5 min
+# Note: each tick reloads the ~28 GB model, so faster cron rates are very
+# wasteful — if you need frequent sampling, use the CONTINUOUS job instead.
+#
+# Image: ECR app beckman/bioclip-species-classifier:0.3.1 (BioCLIP 2.5 ViT-H/14)
+# Camera: Reolink RLC-811A snapshot CGI (creds as query params).
+#
+# Submit (with a write-scoped token):
+#   sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" create -f jobs/bioclip-hummingcam-h00f-oneshot.yaml
+#   sesctl ... submit -j <returned-id>
+# ──────────────────────────────────────────────────────────────
+name: bioclip-hummingcam-oneshot
+plugins:
+  - name: bioclip-species-classifier
+    pluginSpec:
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.1
+      args:
+        - "--snapshot-url"
+        - "http://10.107.0.221:10000/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
+        - "--rank"
+        - "Species"
+        - "--min-confidence"
+        - "0.5"
+        - "--top-k"
+        - "5"
+        - "--continuous"
+        - "N"
+      selector:
+        resource.gpu: "true"
+nodes:
+  H00F: true
+scienceRules:
+  - "schedule(bioclip-species-classifier): cronjob('bioclip-species-classifier', '*/10 * * * *')"
+successcriteria:
+  - WallClock('30day')
