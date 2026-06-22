@@ -270,6 +270,12 @@ Examples:
                         help="Number of top predictions to publish")
     parser.add_argument("--continuous", default="Y",
                         help="Y = loop, N = single-shot")
+    parser.add_argument("--max-runtime", type=int, default=0,
+                        help="When in continuous mode (--continuous Y), exit after this "
+                             "many seconds (0 = run forever). Lets a scheduled job behave "
+                             "like one long bounded single-shot: e.g. --max-runtime 600 "
+                             "--interval 15 samples every 15s for ~10 min then self-exits, "
+                             "freeing the GPU for other plugins. Ignored when --continuous N.")
     args = parser.parse_args()
 
     classifier = BioCLIP2Classifier(
@@ -299,6 +305,15 @@ Examples:
 
         if not using_image_dir:
             logger.info("Capture interval: %ds", args.interval)
+
+        # Bounded continuous mode: in --continuous Y, optionally self-exit after
+        # --max-runtime seconds so a scheduled job runs like one long single-shot
+        # and frees the GPU for other plugins. deadline=None means run forever.
+        deadline = None
+        if args.continuous == "Y" and args.max_runtime > 0 and not using_image_dir:
+            deadline = time.monotonic() + args.max_runtime
+            logger.info("Max runtime: %ds — will self-exit at the end of the window",
+                        args.max_runtime)
 
         while True:
             try:
@@ -399,6 +414,11 @@ Examples:
                 logger.exception("Classification error")
 
             if args.continuous != "Y" and not using_image_dir:
+                break
+            # Bounded-window self-exit: stop before sleeping if the next cycle
+            # would start at/after the deadline.
+            if deadline is not None and time.monotonic() + args.interval >= deadline:
+                logger.info("Max runtime reached — self-exiting to free the GPU")
                 break
             if not using_image_dir:
                 time.sleep(args.interval)
