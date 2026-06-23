@@ -2,6 +2,20 @@
 
 All notable changes to the `bioclip-species-classifier` Sage plugin.
 
+## 0.3.3 — 2026-06-23
+
+### Added
+- **Standard `plugin.duration.*` performance telemetry** (matching
+  `avian-diversity-monitoring` / TAFT-node convention). Each cycle publishes
+  nanosecond phase timings via pywaggle's `plugin.timeit`:
+  `plugin.duration.loadmodel` (model construct + load, once),
+  `plugin.duration.input` (snapshot/capture + decode + BGR→PIL, per cycle),
+  `plugin.duration.inference` (classification, per cycle). Especially valuable
+  here: the ~28 GB model's cold-start cost is now directly measurable, so it's
+  clear how much of a bounded GPU window is load vs. inference. Doubles as a
+  liveness signal even when nothing clears `--min-confidence`. Model load
+  refactored into a `load()` method so it can be timed inside the Plugin context.
+
 ## 0.3.2 — 2026-06-22
 
 ### Added

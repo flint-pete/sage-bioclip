@@ -71,10 +71,16 @@ class BioCLIP2Classifier:
         self.rank = rank
         self.rank_enum = RANK_MAP[rank]
         self.model_str = model_str
+        self.classifier = None  # loaded lazily via load() so the heavy model
+                                # construction can be timed inside the Plugin
+                                # context (plugin.duration.loadmodel)
 
+    def load(self):
+        """Construct the underlying model. Separated from __init__ so callers
+        can wrap it in plugin.timeit('plugin.duration.loadmodel')."""
         logger.info("Loading BioCLIP2 classifier (model=%s, rank=%s)...",
-                     model_str, rank)
-        self.classifier = TreeOfLifeClassifier(model_str=model_str)
+                     self.model_str, self.rank)
+        self.classifier = TreeOfLifeClassifier(model_str=self.model_str)
         logger.info("BioCLIP2 classifier loaded successfully")
 
     def classify(self, image: Image.Image, top_k: int = 5) -> list[dict]:
@@ -278,6 +284,8 @@ Examples:
                              "freeing the GPU for other plugins. Ignored when --continuous N.")
     args = parser.parse_args()
 
+    # Construct the classifier object (cheap); the heavy model load happens
+    # inside the Plugin context below so it can be timed (plugin.duration.loadmodel).
     classifier = BioCLIP2Classifier(
         rank=args.rank,
         model_str=args.model,
@@ -303,6 +311,14 @@ Examples:
         logger.info("Plugin started — source=%s, rank=%s, model=%s",
                      source_label, args.rank, args.model)
 
+        # Load the model, timed as plugin.duration.loadmodel (nanoseconds).
+        # This is the standard Sage telemetry convention (see avian-diversity-
+        # monitoring / TAFT). Publishing it makes cold-start cost observable —
+        # e.g. it instantly shows whether a bounded --max-runtime window is
+        # being consumed by model load vs actual inference.
+        with plugin.timeit("plugin.duration.loadmodel"):
+            classifier.load()
+
         if not using_image_dir:
             logger.info("Capture interval: %ds", args.interval)
 
@@ -317,32 +333,39 @@ Examples:
 
         while True:
             try:
-                if using_image_dir:
-                    # Get next image from directory iterator
-                    try:
-                        img_path, frame, timestamp = next(image_source)
-                    except StopIteration:
-                        logger.info("All test images processed")
-                        break
-                    source_name = os.path.basename(img_path)
-                    logger.info("Processing: %s (%dx%d)",
-                                source_name, frame.shape[1], frame.shape[0])
-                elif using_snapshot_url:
-                    frame = fetch_snapshot(args.snapshot_url)
-                    timestamp = time.time_ns()
-                    source_name = "http-snapshot"
-                    logger.info("Snapshot: %dx%d from %s",
-                                frame.shape[1], frame.shape[0], source_label)
-                else:
-                    sample = camera.snapshot()
-                    frame = sample.data  # numpy BGR
-                    timestamp = sample.timestamp
-                    source_name = args.stream
+                # Acquire input (snapshot/camera/file), timed as
+                # plugin.duration.input (nanoseconds) — the standard Sage phase
+                # metric. Published every cycle, even when nothing clears the
+                # confidence threshold, so it doubles as a liveness signal.
+                with plugin.timeit("plugin.duration.input"):
+                    if using_image_dir:
+                        # Get next image from directory iterator
+                        try:
+                            img_path, frame, timestamp = next(image_source)
+                        except StopIteration:
+                            logger.info("All test images processed")
+                            break
+                        source_name = os.path.basename(img_path)
+                        logger.info("Processing: %s (%dx%d)",
+                                    source_name, frame.shape[1], frame.shape[0])
+                    elif using_snapshot_url:
+                        frame = fetch_snapshot(args.snapshot_url)
+                        timestamp = time.time_ns()
+                        source_name = "http-snapshot"
+                        logger.info("Snapshot: %dx%d from %s",
+                                    frame.shape[1], frame.shape[0], source_label)
+                    else:
+                        sample = camera.snapshot()
+                        frame = sample.data  # numpy BGR
+                        timestamp = sample.timestamp
+                        source_name = args.stream
 
-                # Convert BGR -> RGB -> PIL
-                pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    # Convert BGR -> RGB -> PIL (part of input preparation)
+                    pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-                predictions = classifier.classify(pil_image, top_k=args.top_k)
+                # Run inference, timed as plugin.duration.inference (nanoseconds).
+                with plugin.timeit("plugin.duration.inference"):
+                    predictions = classifier.classify(pil_image, top_k=args.top_k)
 
                 if predictions and predictions[0]["confidence"] >= args.min_confidence:
                     top = predictions[0]

@@ -132,6 +132,24 @@ prohibitively expensive.
 | `env.species.<rank>.confidence`          | float  | Top-1 confidence score (0–1)       |
 | `env.species.top5`                       | string | JSON array of top-5 predictions    |
 
+### Performance Telemetry
+
+Following the standard Sage convention (as used by `avian-diversity-monitoring`
+and other production plugins on TAFT nodes), every cycle publishes nanosecond
+timing for the three execution phases. These make cold-start cost and per-cycle
+latency observable from the data plane — for the ~28 GB BioCLIP 2.5 model this is
+especially useful, since `loadmodel` reveals exactly how much of a bounded GPU
+window the cold start consumes vs. actual inference.
+
+| Topic | Unit | Frequency | Description |
+|-------|------|-----------|-------------|
+| `plugin.duration.loadmodel` | ns | once | Construct + load the BioCLIP model |
+| `plugin.duration.input`     | ns | per cycle | Snapshot/capture + decode + BGR→PIL |
+| `plugin.duration.inference` | ns | per cycle | Run BioCLIP classification |
+
+These publish every cycle regardless of confidence, so they also serve as a
+liveness/heartbeat signal even when nothing clears `--min-confidence`.
+
 Annotated JPEG images are uploaded when the top prediction exceeds
 `--min-confidence`.  In test mode (`--image-dir`), all images are uploaded
 with annotations (including "No confident species prediction" text for
