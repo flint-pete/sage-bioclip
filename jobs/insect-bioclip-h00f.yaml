@@ -1,0 +1,68 @@
+# ──────────────────────────────────────────────────────────────
+# BioCLIP Species Classifier — H00F INSECT cam (WINDOWED continuous)
+#
+# Second BioCLIP deployment on H00F, pointed at the BUG/INSECT camera config:
+# the SAME Reolink RLC-811A, but the insect view is served on PORT 10002
+# (the hummingbird view is on 10000).
+#
+# GPU-SHARING MODE. Thor has ONE GPU shared by FOUR windows now. This job takes
+# the :40 slot — the only free 10-min window left, with guard-bands on both
+# sides so it never contends with the other three plugins:
+#
+#   :00–:10  YOLO            (sage-yolo/jobs/yolo-hummingcam-h00f.yaml)
+#   :10–:20  guard
+#   :20–:30  BioCLIP (birds) (jobs/bioclip-hummingcam-h00f.yaml)
+#   :30–:40  guard
+#   :40–:50  BioCLIP (insects) (THIS job)
+#   :50–:00  guard
+#
+# Mechanism: --continuous Y + --max-runtime 600 makes the plugin behave like one
+# long 10-min single-shot — it loops every --interval seconds, then self-exits
+# at the end of the window (frees GPU). Needs bioclip-species-classifier >= 0.3.2.
+# NOTE: --max-runtime is WALL-CLOCK; the ~28 GB model load (a minute+) eats into
+# the 600s, so effective sampling is ~600s minus cold-start. The 10-min
+# guard-bands absorb that so the window can't bleed into YOLO's :00 slot.
+#
+# CONFIDENCE: --min-confidence 0.7 — report only HIGH-confidence taxa. BioCLIP
+# has no "reject" class and can score confidently on empty frames, so a high bar
+# suppresses most of that noise.
+#
+# Image: ECR app beckman/bioclip-species-classifier:0.3.2 (BioCLIP 2.5 ViT-H/14,
+#        TreeOfLife-200M — covers arthropods/insects as well as birds).
+# Camera: Reolink RLC-811A snapshot CGI on PORT 10002 (creds as query params).
+#
+# Submit (with a write-scoped token):
+#   sesctl --server https://es.sagecontinuum.org --token "$SES_USER_TOKEN" create -f jobs/insect-bioclip-h00f.yaml
+#   sesctl ... submit -j <returned-id>
+# ──────────────────────────────────────────────────────────────
+name: insect-bioclip
+plugins:
+  - name: insect-bioclip
+    pluginSpec:
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.2
+      args:
+        - "--snapshot-url"
+        - "http://10.107.0.221:10002/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
+        - "--rank"
+        - "Species"
+        - "--min-confidence"
+        - "0.7"
+        - "--top-k"
+        - "5"
+        - "--continuous"
+        - "Y"
+        - "--interval"
+        - "15"
+        - "--max-runtime"
+        - "600"
+      selector:
+        resource.gpu: "true"
+nodes:
+  H00F: true
+scienceRules:
+  # Start the 10-min window at :40 each hour — the free slot after the bird
+  # BioCLIP window (:20–:30) + a 10-min guard-band, and before YOLO's :00 window
+  # (another 10-min guard-band at :50–:00). --max-runtime 600 self-exits ~:50.
+  - "schedule(insect-bioclip): cronjob('insect-bioclip-window', '40 * * * *')"
+successcriteria:
+  - WallClock('30day')
