@@ -98,6 +98,17 @@ load cost is paid once rather than per frame.  A per-frame single-shot
 invocation would instead reload the 28 GB model every time, which is
 prohibitively expensive.
 
+> **Subtle behavior — `--max-runtime` is WALL-CLOCK, not inference time.** The
+> timer starts when the process starts, so the model load counts against the
+> window. This matters most for BioCLIP: loading the ~28 GB ViT-H/14 model can
+> take a minute or more, and that time is subtracted from your `--max-runtime`
+> budget before the first classification happens. So `--max-runtime 600` does
+> **not** give 10 minutes of sampling — it gives roughly `600s − model_load`
+> of sampling. If you need a guaranteed amount of *inference* time, raise
+> `--max-runtime` above your target (e.g. ~660–720 s for a 10-minute sampling
+> goal) to absorb the cold start, and keep the guard-band wide enough that a
+> slow load can't push the self-exit into the next plugin's window.
+
 ## Configuration Reference
 
 | Flag               | Type   | Default                              | Description |
