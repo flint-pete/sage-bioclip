@@ -43,7 +43,7 @@ name: insect-bioclip
 plugins:
   - name: insect-bioclip
     pluginSpec:
-      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.2
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.3
       args:
         - "--snapshot-url"
         - "http://10.107.0.221:10002/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
