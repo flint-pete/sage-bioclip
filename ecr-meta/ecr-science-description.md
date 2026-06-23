@@ -52,12 +52,51 @@ skipped — no data is published and no image is saved.  This prevents
 flooding the data pipeline with low-confidence guesses on empty scenes
 (e.g., a feeder with no bird present).
 
+Because BioCLIP performs zero-shot classification it has **no reject
+class** and can score confidently even on empty frames (it always returns
+the closest taxon in the taxonomy).  For production deployments such as
+the H00F hummingcam job, `--min-confidence` is raised to **0.7** so that
+only high-confidence species are reported, suppressing spurious confident
+predictions on frames with no subject present.
+
 **Annotated image output**: when a prediction exceeds the confidence
 threshold, the plugin overlays the top-5 predictions in orange text on
 the source image before uploading.  Each line shows the rank, scientific
 name, and confidence percentage (e.g., `#1: Archilochus colubris (100.0%)`).
 This makes the uploaded images immediately interpretable without needing
 to cross-reference the data records.
+
+## Windowed GPU Sharing
+
+On nodes with a single GPU, two always-on continuous plugins cannot
+co-run without contending for the accelerator.  Sage Thor has **one GPU**
+shared between this plugin and a YOLO object detector, so BioCLIP runs in
+a **bounded time window** rather than continuously.
+
+The `--max-runtime N` flag (v0.3.2) makes this possible.  When combined
+with `--continuous Y`, the plugin loops every `--interval` seconds and
+then **self-exits after N seconds**, behaving like one long bounded
+single-shot.  Cron launches the plugin once per hour, and the
+`--max-runtime` timer cleanly tears it down so the GPU is freed for the
+next plugin's window.
+
+On Thor the two plugins are scheduled on **offset hourly windows with
+10-minute guard-bands** so they never contend for the GPU:
+
+- **:00** — YOLO object detector runs its window
+- **:20** — BioCLIP runs a **10-minute window** (cron starts it with
+  `--max-runtime 600 --interval 15`, sampling every 15 s for ~40 frames,
+  then exiting)
+
+This uses roughly **20 minutes of GPU time per hour** total, with the
+guard-bands ensuring the windows never overlap.
+
+A key benefit of the windowed design is **model warmth**: the ~28 GB
+BioCLIP 2.5 ViT-H/14 model loads **once** at the start of each window and
+stays resident in GPU memory for all ~40 classifications, so the heavy
+load cost is paid once rather than per frame.  A per-frame single-shot
+invocation would instead reload the 28 GB model every time, which is
+prohibitively expensive.
 
 ## Configuration Reference
 
@@ -72,6 +111,7 @@ to cross-reference the data records.
 | `--min-confidence` | float  | `0.1`                                | Minimum confidence to publish predictions and upload image |
 | `--top-k`          | int    | `5`                                  | Number of top predictions to include in output |
 | `--continuous`     | string | `Y`                                  | `Y` = continuous loop, `N` = single-shot |
+| `--max-runtime`    | int    | `0`                                  | Maximum seconds to run before self-exiting (`0` = run forever). With `--continuous Y`, loops every `--interval` seconds then exits after N seconds — a bounded window for GPU sharing. Added in v0.3.2. |
 
 ## Measurements Published
 
