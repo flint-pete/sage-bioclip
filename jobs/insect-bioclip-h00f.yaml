@@ -5,23 +5,26 @@
 # the SAME Reolink RLC-811A, but the insect view is served on PORT 10002
 # (the hummingbird view is on 10000).
 #
-# GPU-SHARING MODE. Thor has ONE GPU shared by FOUR windows now. This job takes
-# the :40 slot — the only free 10-min window left, with guard-bands on both
-# sides so it never contends with the other three plugins:
+# GPU-SHARING MODE. Thor has ONE GPU shared by multiple windows. This job takes
+# a SHORT 2-min slot starting at :40 — insects are slow-moving and linger in the
+# target area, so a 2-min sample (every 15s, ~8 frames) catches them without
+# tying up the GPU for a full 10 min. Guard-bands on both sides keep it clear of
+# the other plugins:
 #
 #   :00–:10  YOLO            (sage-yolo/jobs/yolo-hummingcam-h00f.yaml)
 #   :10–:20  guard
 #   :20–:30  BioCLIP (birds) (jobs/bioclip-hummingcam-h00f.yaml)
 #   :30–:40  guard
-#   :40–:50  BioCLIP (insects) (THIS job)
-#   :50–:00  guard
+#   :40–:42  BioCLIP (insects) (THIS job — short 2-min window)
+#   :42–:00  guard / GPU free
 #
-# Mechanism: --continuous Y + --max-runtime 600 makes the plugin behave like one
-# long 10-min single-shot — it loops every --interval seconds, then self-exits
+# Mechanism: --continuous Y + --max-runtime 120 makes the plugin behave like one
+# bounded 2-min single-shot — it loops every --interval seconds, then self-exits
 # at the end of the window (frees GPU). Needs bioclip-species-classifier >= 0.3.2.
 # NOTE: --max-runtime is WALL-CLOCK; the ~28 GB model load (a minute+) eats into
-# the 600s, so effective sampling is ~600s minus cold-start. The 10-min
-# guard-bands absorb that so the window can't bleed into YOLO's :00 slot.
+# the 120s, so effective sampling is SHORT (~120s minus cold-start = a handful of
+# frames). That's acceptable here because insects stay put — but it does mean the
+# model barely amortizes per window. If sampling proves too thin, bump back up.
 #
 # CONFIDENCE: --min-confidence 0.7 — report only HIGH-confidence taxa. BioCLIP
 # has no "reject" class and can score confidently on empty frames, so a high bar
@@ -54,15 +57,16 @@ plugins:
         - "--interval"
         - "15"
         - "--max-runtime"
-        - "600"
+        - "120"
       selector:
         resource.gpu: "true"
 nodes:
   H00F: true
 scienceRules:
-  # Start the 10-min window at :40 each hour — the free slot after the bird
-  # BioCLIP window (:20–:30) + a 10-min guard-band, and before YOLO's :00 window
-  # (another 10-min guard-band at :50–:00). --max-runtime 600 self-exits ~:50.
+  # Start a SHORT 2-min window at :40 each hour — insects linger, so 2 min is
+  # plenty. Sits in the free slot after the bird BioCLIP window (:20–:30) + a
+  # 10-min guard-band, well clear of YOLO's :00 window. --max-runtime 120
+  # self-exits ~:42, leaving the GPU free for the rest of the hour.
   - "schedule(insect-bioclip): cronjob('insect-bioclip-window', '40 * * * *')"
 successcriteria:
   - WallClock('30day')
