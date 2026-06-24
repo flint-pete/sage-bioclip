@@ -242,6 +242,33 @@ Both fit comfortably in 128 GB unified memory (DGX Spark / Sage Thor).
   YOLO triggers on "bird" or "animal" detections, BioCLIP provides the
   species-level identification for the same frame.
 
+## Testing
+
+The plugin ships two complementary, self-contained test suites (no node,
+network, or Beehive access required):
+
+**1. Local classification tests** (`tests/test_bioclip_local.py`) — run the real
+BioCLIP model against committed test images (`tests/test-images/`) through the
+pywaggle test harness, printing per-image predictions, confidence bars, timing,
+and validating the published topics + annotated images.
+
+**2. Save-match unit tests** (`tests/test_save_match.py`) — 29 pure-Python unit
+tests (no model load) covering the `--save-match` rule grammar and matching in
+`save_match.py`: rule parsing, the `*` wildcard, case-insensitive matching
+against **both** common and scientific names (at the published `--rank`), the
+OR-of-rules semantics, the no-substring rule, malformed-rule fail-fast (bad
+confidence / empty name → clear error, non-zero exit), and out-of-range
+confidence rejection.
+
+```bash
+python3 tests/test_save_match.py    # => "29 passed, 0 failed (29 total)"
+```
+
+> **Note on `save_match.py`:** the matcher module and its test file are kept
+> **byte-identical** across the sage-bioclip, birdnet, and sage-yolo repos (the
+> three plugins do not share a Python package yet). When changing matcher
+> behavior, update all three copies together so they cannot drift.
+
 ## References
 
 - BioCLIP 2.5 Huge model: https://huggingface.co/imageomics/bioclip-2.5-vith14
