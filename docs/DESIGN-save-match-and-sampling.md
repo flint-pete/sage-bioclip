@@ -1,10 +1,16 @@
 # Design Note: Decoupling "publish" from "save" — `--save-match` + periodic sampling
 
-**Status:** DRAFT for review (2026-06-23). Open questions flagged inline.
+**Status:** APPROVED — implementation in progress (2026-06-23).
 **Scope:** Cross-plugin — applies to `bioclip-species-classifier`, `birdnet-species`,
 `yolo-object-counter`, and any future inference plugin. This note lives in the
 sage-bioclip repo for convenience but is the shared spec; mirror the final
 agreed behavior into each plugin's ECR science description.
+
+> Examples in this note use REAL taxa (Northern Cardinal /
+> *Cardinalis cardinalis*, Barn Owl / *Tyto alba*, Blue Jay /
+> *Cyanocitta cristata*) so they can be lifted directly into ECR documentation.
+> BirdNET emits names as `Scientific_Common` (e.g.
+> `Cardinalis cardinalis_Northern Cardinal`).
 
 ---
 
@@ -20,14 +26,14 @@ cost profiles:
   real constraint on edge nodes: upload bandwidth and Beehive storage.
 
 A blunt confidence threshold is a poor proxy for "is this worth saving." A
-student studying Barn Owls does not want the bucket filled with high-confidence
-Robin images. Conversely, lowering the threshold to catch a quiet species floods
-storage with everything else.
+user studying Barn Owls (*Tyto alba*) does not want the bucket filled with
+high-confidence Blue Jay images. Conversely, lowering the threshold to catch a
+quiet species floods storage with everything else.
 
 **Goal:** Separate the two concerns.
 - **Publish** topics for *every* detection above a reporting floor (the
   scientific record stays complete).
-- **Save** input media *selectively*, driven by an explicit, student-specified
+- **Save** input media *selectively*, driven by an explicit, user-specified
   intent — not a single global number.
 
 ---
@@ -43,7 +49,7 @@ rule (right name AND confidence ≥ that rule's threshold).
 **Format** (single string, easy to read back from logs):
 
 ```
---save-match "Barn Owl:0.5,Cardinal:0.7"
+--save-match "Barn Owl:0.5,Northern Cardinal:0.7"
 ```
 
 - Delimiter between rules: `,`
@@ -63,17 +69,19 @@ rule (right name AND confidence ≥ that rule's threshold).
   name**, at the rank the plugin is currently publishing.
 - `*` is the only wildcard: matches any name (still subject to the confidence in
   that rule).
-- No substring matching. "Cardinal" matches the taxon whose common name is
-  exactly "Cardinal" at the published rank — it does NOT match "Northern
-  Cardinal". (If a student wants Northern Cardinal, they write the exact name the
-  model emits. This is documented loudly; substring was rejected as a footgun.)
+- No substring matching. `Northern Cardinal:0.7` matches the taxon whose common
+  name is exactly "Northern Cardinal" (or whose scientific name is exactly
+  "Cardinalis cardinalis") — it does NOT match on a bare "Cardinal". (If a user
+  wants a species, they write the exact name the model emits — see the species
+  list in the model's documentation. This is documented loudly; substring was
+  rejected as a footgun.)
 
 **Rank awareness (DECIDED — must be documented prominently):**
 - The name in each rule is matched against **whatever taxonomic rank the plugin
   is configured to publish** (e.g. bioclip `--rank Species` → match species
   names; `--rank Order` → match order names like "Lepidoptera").
 - A species-name rule on an order-rank job will simply never match → no saves.
-  The docs must make this explicit so students don't silently get nothing.
+  The docs must make this explicit so users don't silently get nothing.
 
 **Multiple detections per execution (DECIDED):**
 - Many models return several detections per input (e.g. one 30s BirdNET clip
@@ -83,26 +91,29 @@ rule (right name AND confidence ≥ that rule's threshold).
   both the rule list and the detection list.
 - Exactly one artifact is uploaded per execution (not one per detection).
 
-### 2.2 Periodic reference sampler (feature #2) — SEPARATE PLUGIN (DECIDED)
+### 2.2 Periodic reference sampler (feature #2) — SEPARATE PLUGIN, DEFERRED
 
-Rather than embedding "save one every hour" logic inside each inference plugin
-(which complicates the continuous-vs-windowed lifecycle — a windowed GPU pod that
-only lives 5 minutes can't meaningfully do "once an hour"), the periodic
-reference capture becomes its **own dedicated plugin**:
+**Decision (2026-06-23): defer implementation.** The periodic reference capture
+will be its own dedicated plugin, but it is explicitly NOT part of this work
+cycle. We will build it AFTER the `--save-match` improvement + refactor of yolo
+and bioclip (and birdnet) is complete, and only after **surveying the existing
+Sage sampler code already on GitHub** (e.g. waggle-sensor imagesampler /
+audiosampler and related plugins) so we build a nice GENERIC sampler rather than
+reinventing one. Goal: a clean, reusable sampler that fits the Sage ecosystem.
 
+Architectural intent (to validate against existing code when we get there):
 - Fires on **wall-clock schedule** (e.g. hourly) via the SES science rule.
-- Does **no inference** — just grabs an image and/or audio sample and uploads it.
-- **Requires no GPU** — schedules freely without contending for the single Thor
-  GPU used by the AI pipeline.
-- Cleanly identified as a **"sampler"** in the data stream, so adjusting the
-  sampling period is a one-line schedule change that never disturbs the
-  scientific AI pipeline.
+- Does **no inference**, **requires no GPU** — schedules freely without
+  contending for the single Thor GPU used by the AI pipeline.
+- Saves the **raw** sample (image and/or audio), distinct from `--save-match`
+  which saves the annotated inference output.
+- Cleanly identified as a **"sampler"** in the data stream; period is a one-line
+  schedule change that never disturbs the scientific AI pipeline.
 - Uploads carry meta marking them as reference samples (e.g.
-  `meta={"trigger": "periodic-sampler"}`), distinct from match-triggered saves.
+  `meta={"trigger": "periodic-sampler"}`).
 
-This keeps each concern in its own clearly-named, independently-tunable unit.
-(Spec for the sampler plugin itself is a follow-on; this note records the
-architectural decision to split it out.)
+This note records the architectural decision to split it out; the concrete spec
++ implementation is a follow-on after the existing-code survey.
 
 ---
 
@@ -169,7 +180,7 @@ selects among what was published.
 
 ### 5.3 Heartbeat invariant — applies to ALL plugins
 Every plugin must emit at least the summary/heartbeat datapoint(s) on **every
-run**, even with zero detections, so a student can see the plugin ran. This is a
+run**, even with zero detections, so a user can see the plugin ran. This is a
 hard requirement across bioclip, birdnet, yolo. (Today birdnet's summary publish
 is nested inside `if detections:` — that is a bug to fix as part of this work;
 hoist the summary publish out of the detection branch.)
@@ -185,7 +196,8 @@ hoist the summary publish out of the detection branch.)
 - `--save-match` saves the ANNOTATED image; the sampler saves RAW.
 - Omitting `--save-match` = save nothing (opt-in media saving).
 - `--save-match` operates ONLY on published detections (Model A, single floor).
-- Periodic sampling = separate, no-GPU, wall-clock "sampler" plugin (saves raw).
+- Periodic sampling = separate, no-GPU, wall-clock "sampler" plugin (saves raw) —
+  DEFERRED to a follow-on after surveying existing Sage sampler code.
 - Publish-always / save-selectively as strictly separate code paths.
 - Every run emits heartbeat datapoint(s) even with zero detections (all plugins).
 - `--save-match` is the sole media-save path; `--min-confidence` = publish floor.
@@ -240,10 +252,23 @@ data plane before declaring done.
   - Match against common OR scientific at the configured `--rank`.
 - Ensure a heartbeat datapoint publishes every run even with zero detections
   (add bioclip summary if missing — see Stage 0).
-- Docs IN THE SAME COMMIT: ecr-science-description (new `--save-match` section +
-  rank-awareness warning + "save = annotated, only path that saves, operates on
-  published detections only"), CHANGELOG, version bump (0.3.3 → 0.4.0; new
-  user-facing feature = minor bump).
+- **ECR documentation (REQUIRED, same commit) — write for the USER:**
+  - New "Saving images: `--save-match`" section in
+    `ecr-meta/ecr-science-description.md` with: the OR-list grammar
+    (`"Name:conf,Name:conf"`), a real worked example
+    (`--save-match "Barn Owl:0.5,Northern Cardinal:0.7"`), the `*:conf` wildcard,
+    and a plain-language explanation of how to adjust it.
+  - A **prominent RANK-AWARENESS warning**: names match the rank set by `--rank`;
+    a Species name on an `--rank Order` job never matches.
+  - An explicit **parameter table** distinguishing `--min-confidence` (publish
+    floor — raise to reduce noisy topic reports) from `--save-match` (the ONLY
+    thing that saves an image; operates only on already-published detections).
+  - State clearly: every run publishes topics + a heartbeat even with zero
+    detections; omitting `--save-match` saves nothing; saved image is annotated.
+  - Also update the sage.yaml input description text for `save-match` so the
+    portal form explains it.
+- CHANGELOG + version bump (0.3.3 → 0.4.0; new user-facing feature = minor bump),
+  all in ONE commit with the code + docs.
 - Real test on Thor + verify in data plane: topics still publish for all
   detections; image uploads ONLY when a rule matches; quiet run still emits
   heartbeat; a `*:c` run reproduces "save anything ≥ c".
@@ -254,34 +279,48 @@ data plane before declaring done.
   publish out of `if detections:` so it fires on quiet cycles.
 - Match against common OR scientific. Save = the captured audio clip (no
   annotation). ANY match over the clip's detections → save the clip once.
-- Docs + version bump (0.1.6 → 0.2.0) + CHANGELOG in one commit. Test + verify.
+- **ECR documentation (REQUIRED, same commit) — write for the USER:** mirror the
+  bioclip `--save-match` section, adapted for audio (saved artifact = the audio
+  clip, not an image); the same `--min-confidence` vs `--save-match` parameter
+  table; note that one clip can contain several detections and ANY match saves
+  the whole clip once; document the now-always-on heartbeat. Update the sage.yaml
+  input description for `save-match`.
+- CHANGELOG + version bump (0.1.6 → 0.2.0), all in one commit. Test + verify.
 
 ### Stage 4 — yolo integration
 - Same wiring; match against COCO class name. Save = annotated frame.
 - Confirm yolo already heartbeats every cycle (`env.count.total`); document it as
-  the heartbeat. Docs + version bump (0.2.2 → 0.3.0) + CHANGELOG. Test + verify.
+  the heartbeat.
+- **ECR documentation (REQUIRED, same commit) — write for the USER:** mirror the
+  `--save-match` section but state explicitly that YOLO matches the **COCO class
+  name** (give real examples: `--save-match "bird:0.5,person:0.6"`), list where
+  to find the COCO class names, and the same `--min-confidence` vs `--save-match`
+  parameter table. Update the sage.yaml input description for `save-match`.
+- CHANGELOG + version bump (0.2.2 → 0.3.0), all in one commit. Test + verify.
 
-### Stage 5 — periodic sampler plugin (new plugin, separate repo/dir)
-- New minimal plugin: no inference, no GPU. Grabs an image and/or audio sample
-  and uploads the RAW artifact with `meta={"trigger":"periodic-sampler"}`.
-- Args: source (camera snapshot URL / stream, and/or audio camera), what to
-  capture (image | audio | both). Period is set by the SES science rule
-  (`cronjob(... '0 * * * *')`), not a plugin arg — keeps period a one-line
-  schedule change.
-- Own sage.yaml, ecr-science-description, CHANGELOG, jobs/ example. Build /
-  catalog / sideload / submit / verify a raw upload lands hourly.
+### Stage 5 — periodic sampler plugin — DEFERRED (survey existing code first)
+NOT part of this work cycle. After Stages 0–4 + 6 are complete:
+1. **Survey existing Sage sampler plugins** on GitHub (waggle-sensor
+   imagesampler / audiosampler and related) — understand what already exists,
+   their args, scheduling, and upload conventions.
+2. Decide build-new vs. extend-existing, aiming for a **generic, reusable**
+   sampler that fits the ecosystem (no inference, no GPU, raw upload, period via
+   SES schedule, `meta={"trigger":"periodic-sampler"}`).
+3. Then write its own design note / spec and implement with full ECR docs.
+(Tracked separately; do not start until the survey is done.)
 
 ### Stage 6 — cross-cutting docs + skill
 - Add a short "save-match conventions" reference to the sage-waggle skill so the
-  pattern (publish-always / save-selectively, single-floor, exact-match rule) is
-  reusable for future plugins.
+  pattern (publish-always / save-selectively, single-floor, exact-match rule,
+  required ECR doc shape) is reusable for future plugins.
 - Cross-link this design note from the shared `~/AI-projects/Sage-potential-
   features.md`.
 
 ### Sequencing / parallelism
 - Stages 1→2 are the critical path (helper proven, then lead plugin proves the
   end-to-end shape on real hardware). 3 and 4 can follow in either order once 2
-  is validated. Stage 5 is independent and can be done anytime after Stage 0.
+  is validated. Stage 5 (sampler) is DEFERRED until after 0–4 + 6 and an
+  existing-code survey.
 - GPU contention reminder: bioclip/yolo/birdnet share the single Thor GPU via
-  windowed scheduling; the sampler is GPU-free and schedules freely.
+  windowed scheduling; the future sampler is GPU-free and schedules freely.
 
