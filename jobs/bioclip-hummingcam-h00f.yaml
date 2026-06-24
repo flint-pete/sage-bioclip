@@ -26,7 +26,7 @@
 # suppresses most of that noise. (System-level species gating still belongs in
 # the slack-hummingbird watcher; see that project.)
 #
-# Image: ECR app beckman/bioclip-species-classifier:0.3.2 (BioCLIP 2.5 ViT-H/14)
+# Image: ECR app beckman/bioclip-species-classifier:0.4.0 (BioCLIP 2.5 ViT-H/14)
 # Camera: Reolink RLC-811A snapshot CGI (creds as query params).
 #
 # Submit (with a write-scoped token):
@@ -40,7 +40,7 @@ name: bioclip-hummingcam
 plugins:
   - name: bioclip-species-classifier
     pluginSpec:
-      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.3.3
+      image: registry.sagecontinuum.org/beckman/bioclip-species-classifier:0.4.0
       args:
         - "--snapshot-url"
         - "http://10.107.0.221:10000/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=snap&user=sage&password=SageCam!&width=640&height=360"
@@ -48,6 +48,11 @@ plugins:
         - "Species"
         - "--min-confidence"
         - "0.7"
+        - "--save-match"
+        # Save annotated image for ANY species at >=0.7 (reproduces the prior
+        # "upload high-confidence frames" behavior). To save only specific birds,
+        # replace with e.g. "Archilochus colubris:0.6,Selasphorus rufus:0.6".
+        - "*:0.7"
         - "--top-k"
         - "5"
         - "--continuous"

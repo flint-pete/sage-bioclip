@@ -38,6 +38,8 @@ from bioclip.predict import TreeOfLifeClassifier
 from waggle.plugin import Plugin
 from waggle.data.vision import Camera
 
+from save_match import parse_save_match, should_save, SaveMatchError
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -98,18 +100,22 @@ class BioCLIP2Classifier:
             k=top_k,
         )
 
-        # Build a display name from the rank-level key
+        # Build a display name from the rank-level key. We also carry the
+        # common_name (when pybioclip provides it, e.g. at Species rank) so the
+        # --save-match logic can match on common OR scientific name.
         rank_key = self.rank.lower()
         if rank_key == "species":
-            # Species rank has a 'species' key with binomial name
+            # Species rank has a 'species' key with binomial (scientific) name
             predictions = [
                 {"name": r.get("species", r.get("genus", "Unknown")),
+                 "common_name": r.get("common_name", ""),
                  "confidence": float(r["score"])}
                 for r in results
             ]
         else:
             predictions = [
                 {"name": r.get(rank_key, "Unknown"),
+                 "common_name": r.get("common_name", ""),
                  "confidence": float(r["score"])}
                 for r in results
             ]
@@ -271,7 +277,19 @@ Examples:
     parser.add_argument("--interval", type=int, default=60,
                         help="Seconds between captures (camera mode only)")
     parser.add_argument("--min-confidence", type=float, default=0.1,
-                        help="Minimum confidence to publish")
+                        help="Minimum confidence to PUBLISH a topic (the "
+                             "reporting floor). Raise to reduce noisy reports. "
+                             "Does NOT control image saving — see --save-match.")
+    parser.add_argument("--save-match", type=str, default="",
+                        help="When to SAVE (upload) the annotated image. "
+                             "Comma-separated OR-list of 'Name:confidence' rules, "
+                             "e.g. \"Barn Owl:0.5,Northern Cardinal:0.7\". Name is "
+                             "matched case-insensitively and EXACTLY against the "
+                             "common OR scientific name at the published --rank. "
+                             "Use \"*:0.7\" to save any detection >=0.7. The image "
+                             "is saved if ANY detection matches ANY rule. Operates "
+                             "only on published detections (>= --min-confidence). "
+                             "Omit to save no images (topics still publish).")
     parser.add_argument("--top-k", type=int, default=5,
                         help="Number of top predictions to publish")
     parser.add_argument("--continuous", default="Y",
@@ -283,6 +301,21 @@ Examples:
                              "--interval 15 samples every 15s for ~10 min then self-exits, "
                              "freeing the GPU for other plugins. Ignored when --continuous N.")
     args = parser.parse_args()
+
+    # Parse --save-match up front and FAIL FAST on a malformed spec: a typo'd
+    # save rule that silently saved nothing would waste an entire deployment.
+    try:
+        save_rules = parse_save_match(args.save_match)
+    except SaveMatchError as e:
+        logger.error("Invalid --save-match: %s", e)
+        raise SystemExit(2)
+    if save_rules:
+        logger.info("Image save rules (--save-match): %s",
+                    ", ".join(f"{'*' if r.is_wildcard else r.name}>={r.min_confidence}"
+                              for r in save_rules))
+    else:
+        logger.info("No --save-match rules: images will NOT be saved "
+                    "(topics still publish every cycle).")
 
     # Construct the classifier object (cheap); the heavy model load happens
     # inside the Plugin context below so it can be timed (plugin.duration.loadmodel).
@@ -367,11 +400,17 @@ Examples:
                 with plugin.timeit("plugin.duration.inference"):
                     predictions = classifier.classify(pil_image, top_k=args.top_k)
 
-                if predictions and predictions[0]["confidence"] >= args.min_confidence:
-                    top = predictions[0]
+                # ── PATH 1: PUBLISH (always) ─────────────────────────
+                # Publish the published-detection topics for every cycle, and a
+                # heartbeat so a user can see the plugin ran even when nothing is
+                # above the floor. Topics are cheap; this is the scientific record
+                # + liveness signal. Saving media is a SEPARATE decision below.
+                rank_lower = args.rank.lower()
+                published = [p for p in predictions
+                            if p["confidence"] >= args.min_confidence]
 
-                    # Publish top prediction
-                    rank_lower = args.rank.lower()
+                if published:
+                    top = published[0]
                     plugin.publish(
                         f"env.species.{rank_lower}",
                         top["name"],
@@ -385,53 +424,59 @@ Examples:
                         timestamp=timestamp,
                         meta={"camera": source_name, "rank": args.rank},
                     )
-
-                    # Publish top-5 as JSON
                     plugin.publish(
-                        f"env.species.top5",
-                        json.dumps(predictions),
+                        "env.species.top5",
+                        json.dumps(published),
                         timestamp=timestamp,
                         meta={"camera": source_name, "rank": args.rank},
                     )
-
-                    logger.info("Top prediction: %s (%.4f)", top["name"], top["confidence"])
-                    for i, p in enumerate(predictions[1:], 2):
+                    logger.info("Top prediction: %s (%.4f)",
+                                top["name"], top["confidence"])
+                    for i, p in enumerate(published[1:], 2):
                         logger.info("  #%d: %s (%.4f)", i, p["name"], p["confidence"])
+                else:
+                    logger.info("No confident prediction (top=%.4f, threshold=%.2f)",
+                                predictions[0]["confidence"] if predictions else 0,
+                                args.min_confidence)
 
-                    # Upload annotated image
+                # Heartbeat: ALWAYS published, even with zero confident detections,
+                # so the data plane proves this cycle ran (distinguishes
+                # "running, nothing seen" from "job dead").
+                plugin.publish(
+                    "env.species.summary",
+                    json.dumps({
+                        "published_count": len(published),
+                        "top_confidence": round(predictions[0]["confidence"], 4)
+                        if predictions else 0.0,
+                    }),
+                    timestamp=timestamp,
+                    meta={"camera": source_name, "rank": args.rank},
+                )
+
+                # ── PATH 2: SAVE (selective) ─────────────────────────
+                # Upload the ANNOTATED image only when a published detection
+                # matches a --save-match rule (any rule x any detection). In
+                # --image-dir test mode, always upload so results can be reviewed.
+                save_it = using_image_dir or should_save(
+                    save_rules, published,
+                    name_keys=["name", "common_name"],
+                )
+                if save_it:
                     annotated = annotate_predictions(frame, predictions,
                                                      args.min_confidence)
                     stem = os.path.splitext(source_name)[0]
                     tmp_path = os.path.join(tempfile.gettempdir(),
                                             f"{stem}-classified.jpg")
                     cv2.imwrite(tmp_path, annotated)
+                    top_name = published[0]["name"] if published else "none"
+                    top_conf = str(published[0]["confidence"]) if published else "0"
                     plugin.upload_file(tmp_path, timestamp=timestamp,
                                        meta={"camera": source_name,
-                                             "top_species": top["name"],
-                                             "confidence": str(top["confidence"])})
+                                             "top_species": top_name,
+                                             "confidence": top_conf})
                     if os.path.exists(tmp_path):
                         os.unlink(tmp_path)
-                else:
-                    logger.info("No confident prediction (top=%.4f, threshold=%.2f)",
-                                predictions[0]["confidence"] if predictions else 0,
-                                args.min_confidence)
-
-                    # In test mode (--image-dir), still upload annotated image
-                    # so all results can be reviewed. In production, skip upload
-                    # to avoid flooding storage with low-confidence frames.
-                    if using_image_dir:
-                        annotated = annotate_predictions(frame, predictions,
-                                                         args.min_confidence)
-                        stem = os.path.splitext(source_name)[0]
-                        tmp_path = os.path.join(tempfile.gettempdir(),
-                                                f"{stem}-classified.jpg")
-                        cv2.imwrite(tmp_path, annotated)
-                        plugin.upload_file(tmp_path, timestamp=timestamp,
-                                           meta={"camera": source_name,
-                                                 "top_species": "none",
-                                                 "confidence": "0"})
-                        if os.path.exists(tmp_path):
-                            os.unlink(tmp_path)
+                    logger.info("Saved annotated image (save-match matched)")
 
             except Exception:
                 logger.exception("Classification error")

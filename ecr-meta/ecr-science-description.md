@@ -44,27 +44,76 @@ or HTTP snapshot URL such as a Reolink IP camera), classifies each frame
 at the configured taxonomic rank, and publishes the top-k predictions
 with confidence scores.
 
-**Confidence thresholding** controls when results are published and images
-are uploaded.  The `--min-confidence` flag (default: 0.1) sets the minimum
-confidence for the top prediction before the plugin publishes data and
-uploads the annotated image.  Below this threshold, the frame is silently
-skipped — no data is published and no image is saved.  This prevents
-flooding the data pipeline with low-confidence guesses on empty scenes
-(e.g., a feeder with no bird present).
+**Publishing vs. saving — two independent decisions.** This plugin separates
+*what it reports* from *what images it saves*, because they have very different
+costs. Publishing a measurement topic is cheap (a few bytes); saving an image to
+Beehive is expensive (bandwidth + storage). They are controlled by two different
+flags:
 
-Because BioCLIP performs zero-shot classification it has **no reject
-class** and can score confidently even on empty frames (it always returns
-the closest taxon in the taxonomy).  For production deployments such as
-the H00F hummingcam job, `--min-confidence` is raised to **0.7** so that
-only high-confidence species are reported, suppressing spurious confident
-predictions on frames with no subject present.
+- **`--min-confidence`** (default 0.1) is the **reporting floor**: the minimum
+  confidence for the top prediction to be *published* as a topic. Raise it to
+  reduce noisy, low-confidence reports. It does **NOT** control image saving.
+- **`--save-match`** controls **image saving** (upload), and is the **only** way
+  an image gets saved. See "Saving Images" below.
 
-**Annotated image output**: when a prediction exceeds the confidence
-threshold, the plugin overlays the top-5 predictions in orange text on
-the source image before uploading.  Each line shows the rank, scientific
-name, and confidence percentage (e.g., `#1: Archilochus colubris (100.0%)`).
-This makes the uploaded images immediately interpretable without needing
-to cross-reference the data records.
+Because BioCLIP performs zero-shot classification it has **no reject class** and
+can score confidently even on empty frames (it always returns the closest taxon
+in the taxonomy). For production deployments such as the H00F hummingcam job,
+`--min-confidence` is raised to **0.7** so that only high-confidence species are
+reported, suppressing spurious confident predictions on frames with no subject.
+
+**Every cycle publishes something — including a heartbeat.** On every capture the
+plugin publishes a `env.species.summary` heartbeat (and, when a prediction clears
+`--min-confidence`, the per-rank topics). This means a user can always confirm
+the plugin ran from the data plane, even during quiet periods with no confident
+detection — distinguishing "running, nothing seen" from "job is dead."
+
+## Saving Images: `--save-match`
+
+By default (when `--save-match` is omitted) **no images are saved at all** — the
+plugin only publishes measurement topics. To save annotated images, give
+`--save-match` a list of rules describing *what you are looking for*.
+
+A rule is a **name and a confidence**, written `Name:confidence`. Multiple rules
+are separated by commas and combined with **OR**. An image is saved if **any**
+detection in the frame matches **any** rule:
+
+```
+--save-match "Barn Owl:0.5,Northern Cardinal:0.7"
+```
+
+This saves the annotated image whenever a Barn Owl is detected at ≥0.5
+confidence **or** a Northern Cardinal at ≥0.7. The `Name` is matched
+**case-insensitively** and **exactly** against either the **common name** or the
+**scientific name**. There is **no substring matching**: `Northern Cardinal`
+matches *Cardinalis cardinalis* / "Northern Cardinal", but a bare `Cardinal`
+matches nothing. Use the exact names the model emits (see the TreeOfLife
+taxonomy / pybioclip).
+
+To reproduce the simple "save anything above a threshold" behavior, use the
+**wildcard** `*`:
+
+```
+--save-match "*:0.7"      # save the image for any detection at >= 0.7
+```
+
+> **IMPORTANT — names must match the rank you publish.** `--save-match` matches
+> against whichever taxonomic rank `--rank` is set to. If you run `--rank Order`
+> and write a species rule like `Tyto alba:0.5`, it will **never match** (the
+> plugin is emitting order names, not species). Match Species names on
+> `--rank Species` jobs, Order names on `--rank Order` jobs, and so on.
+
+> **`--save-match` operates on published detections only.** A rule's confidence
+> is only meaningful at or above `--min-confidence`. For example, with
+> `--min-confidence 0.7` a rule `Barn Owl:0.5` effectively saves Barn Owls at
+> ≥0.7, because a 0.55 Barn Owl was never published and is therefore invisible to
+> the save logic. To save a species at a low confidence, lower `--min-confidence`
+> accordingly.
+
+**What gets saved:** the **annotated** image — the source frame with the top-5
+predictions overlaid in orange text (rank, name, confidence), so the uploaded
+images are immediately interpretable. In test mode (`--image-dir`), every image
+is uploaded regardless of `--save-match` so all test results can be reviewed.
 
 ## Windowed GPU Sharing
 
@@ -119,7 +168,8 @@ prohibitively expensive.
 | `--rank`           | string | `Class`                              | Taxonomic rank: Kingdom, Phylum, Class, Order, Family, Genus, Species |
 | `--model`          | string | `hf-hub:imageomics/bioclip-2.5-vith14` | BioCLIP model identifier |
 | `--interval`       | int    | `60`                                 | Seconds between captures (camera/snapshot-url mode) |
-| `--min-confidence` | float  | `0.1`                                | Minimum confidence to publish predictions and upload image |
+| `--min-confidence` | float  | `0.1`                                | **Reporting floor** — minimum confidence to PUBLISH a topic. Raise to reduce noisy reports. Does NOT control image saving. |
+| `--save-match`     | string | _(empty)_                            | **Image saving** — OR-list of `Name:confidence` rules, e.g. `"Barn Owl:0.5,Northern Cardinal:0.7"`. Image saved if ANY detection matches ANY rule (exact, case-insensitive, common OR scientific name at the published `--rank`). `"*:0.7"` saves anything ≥0.7. Operates on published detections only. Omit = save nothing. The ONLY way images are saved. |
 | `--top-k`          | int    | `5`                                  | Number of top predictions to include in output |
 | `--continuous`     | string | `Y`                                  | `Y` = continuous loop, `N` = single-shot |
 | `--max-runtime`    | int    | `0`                                  | Maximum seconds to run before self-exiting (`0` = run forever). With `--continuous Y`, loops every `--interval` seconds then exits after N seconds — a bounded window for GPU sharing. Added in v0.3.2. |
@@ -131,6 +181,7 @@ prohibitively expensive.
 | `env.species.<rank>`                     | string | Top-1 predicted taxon name         |
 | `env.species.<rank>.confidence`          | float  | Top-1 confidence score (0–1)       |
 | `env.species.top5`                       | string | JSON array of top-5 predictions    |
+| `env.species.summary`                    | string | JSON heartbeat published EVERY cycle (even with zero confident detections): `{published_count, top_confidence}`. Proves the cycle ran. |
 
 ### Performance Telemetry
 
@@ -150,10 +201,11 @@ window the cold start consumes vs. actual inference.
 These publish every cycle regardless of confidence, so they also serve as a
 liveness/heartbeat signal even when nothing clears `--min-confidence`.
 
-Annotated JPEG images are uploaded when the top prediction exceeds
-`--min-confidence`.  In test mode (`--image-dir`), all images are uploaded
-with annotations (including "No confident species prediction" text for
-frames below threshold) to facilitate review of every test image.
+Annotated JPEG images are uploaded only when a published detection matches a
+`--save-match` rule (see "Saving Images" above).  In test mode (`--image-dir`),
+all images are uploaded with annotations (including "No confident species
+prediction" text for frames below threshold) to facilitate review of every test
+image.
 
 ## Resource Requirements
 
@@ -172,11 +224,16 @@ Both fit comfortably in 128 GB unified memory (DGX Spark / Sage Thor).
 - **Hummingbird monitoring** — `--rank Species --min-confidence 0.5 --interval 60`
   at a feeder station to identify visiting hummingbird species by their
   binomial name (e.g., *Archilochus colubris* — Ruby-throated Hummingbird).
-  Tested at 99.95% confidence on live feeder camera.
+  Add `--save-match "Archilochus colubris:0.6,Selasphorus rufus:0.6"` to save
+  annotated images only when those hummingbirds are seen. Tested at 99.95%
+  confidence on live feeder camera.
 - **Avian surveys** — `--rank Order --interval 60` at bird feeder stations
-  to classify bird families visiting throughout the day.
-- **Invasive species detection** — `--rank Species --min-confidence 0.3`
-  to flag potential invasive species for rapid response.
+  to classify bird families visiting throughout the day. (With `--rank Order`,
+  any `--save-match` rules must use Order names, not species.)
+- **Invasive species detection** — `--rank Species --min-confidence 0.3
+  --save-match "Lymantria dispar:0.3"` to publish all species but save images
+  only when a target invasive (here, spongy moth *Lymantria dispar*) is seen,
+  enabling rapid response without flooding storage.
 - **Pollinator surveys** — `--rank Family` on cameras positioned near
   flowering plants to classify insect visitors.
 - **Marine biodiversity** — deploy on underwater camera nodes to classify

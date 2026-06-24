@@ -57,6 +57,7 @@ ENV HF_HOME=/root/.cache/huggingface
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 
+COPY save_match.py .
 COPY app.py .
 
 ENTRYPOINT ["python3", "/app/app.py"]

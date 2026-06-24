@@ -2,6 +2,36 @@
 
 All notable changes to the `bioclip-species-classifier` Sage plugin.
 
+## 0.4.0 — 2026-06-23
+
+### Added
+- **`--save-match`: species-aware image saving, decoupled from publishing.**
+  Image upload is now governed by an explicit OR-list of `Name:confidence` rules
+  (e.g. `"Barn Owl:0.5,Northern Cardinal:0.7"`) instead of being tied to
+  `--min-confidence`. An annotated image is saved when ANY published detection
+  matches ANY rule. Name matching is case-insensitive and EXACT against the
+  common OR scientific name at the published `--rank` (no substring matching).
+  The wildcard `"*:0.7"` reproduces the old "save anything ≥ threshold" behavior.
+  Implemented via the shared `save_match.py` helper (29 unit tests).
+- **`env.species.summary` heartbeat published EVERY cycle**, even with zero
+  confident detections (`{published_count, top_confidence}`), so a user can
+  always confirm from the data plane that the plugin ran.
+
+### Changed
+- **`--min-confidence` is now strictly the reporting floor** (what gets
+  *published*), no longer the image-save trigger. Raise it to reduce noisy topic
+  reports; it no longer affects which images are saved.
+- **Image saving is now strictly opt-in.** With `--save-match` omitted, NO images
+  are uploaded (topics still publish). Jobs that want images must set
+  `--save-match` (use `"*:<conf>"` to keep prior behavior). NOTE: this is a
+  behavior change — a job upgraded to 0.4.0 without a `--save-match` will publish
+  topics but stop uploading images until a rule is added.
+- Publish and save are now strictly separate code paths in `app.py`.
+
+### Migration
+- Add a `--save-match` arg to existing jobs. `"*:0.7"` matches the previous
+  "upload when top prediction ≥ 0.7" behavior; a species list saves selectively.
+
 ## 0.3.3 — 2026-06-23
 
 ### Added
